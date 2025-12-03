@@ -18,23 +18,28 @@ scrape_configs:
             values: [running]
 
     relabel_configs:
-      # 1. IMPORTANT: Create the file path from the Container ID
-      # This tells Promtail which file on disk corresponds to this container
+      # File path for each container's logs 
+      # Using container ID to construct the log file path
       - source_labels: ['__meta_docker_container_id']
         target_label: '__path__'
         replacement: '/var/lib/docker/containers/$1/$1-json.log'
 
-      # 2. Extract the container name
+      # Container Name 
+      # Extracting the container name from Docker metadata
       - source_labels: ['__meta_docker_container_name']
         regex: '/(.*)'
-        target_label: 'container_name'
+        target_label: 'container'
         replacement: '$1'
 
-      # 3. Add other useful Docker metadata
+      # Docker Compose Service Name 
+      # Extracting service name from Docker labels
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'service'
+
+      # Image name 
+
       - source_labels: ['__meta_docker_container_image']
         target_label: 'image'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'compose_service'
 
     pipeline_stages:
       - docker: {}
