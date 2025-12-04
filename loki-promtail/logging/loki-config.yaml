@@ -1,3 +1,11 @@
+# -------------------------------------------------------------------------
+# LOKI CONFIGURATION
+# -------------------------------------------------------------------------
+
+# Disables multi-tenancy. 
+# If set to true, you would need to send an "X-Scope-OrgID" header with every request.
+# For internal use/single team, 'false' is much easier to manage.
+
 auth_enabled: false
 
 server:
@@ -8,37 +16,73 @@ common:
   path_prefix: /loki
   storage:
     filesystem:
+      # Where the actual log data (chunks) and index rules are stored on disk.
+      # Ensure the 'loki-data' volume in Docker Compose maps to /loki.
       chunks_directory: /loki/chunks
       rules_directory: /loki/rules
+
+  # CRITICAL FOR SINGLE NODE:
+  # Sets replication to 1 because we only have one Loki instance.
+  # If this is >1, Loki will hang waiting for other nodes to confirm writes.
   replication_factor: 1
   ring:
     instance_addr: 127.0.0.1
     kvstore:
+      # CRITICAL FIX: 
+      # Uses memory for the ring state instead of looking for an external consul/etcd.
+      # This fixes the common "connection refused" or "ring not ready" errors in local setups.
       store: inmemory  # <--- THIS FIXES THE CONNECTION REFUSED ERROR
 
 schema_config:
   configs:
     - from: 2024-01-01
-      store: boltdb-shipper
-      object_store: filesystem
+      store: boltdb-shipper # Uses BoltDB for the index (metadata)
+      object_store: filesystem # Uses the local disk for the chunks (log content)
       schema: v13
       index:
         prefix: index_
-        period: 24h
+        period: 24h # Creates a new index file every 24 hours
 
+# -------------------------------------------------------------------------
+# COMPACTOR (REQUIRED FOR RETENTION)
+# -------------------------------------------------------------------------
+# This block was missing but is mandatory if you want 'retention_period' to work.
+# The compactor runs in the background to merge index files and DELETE old logs.
+
+# compactor:
+#   working_directory: /loki/boltdb-shipper-compactor
+#   shared_store: filesystem
+#   retention_enabled: true     # Must be true, otherwise limits_config retention is ignored.
+
+# -------------------------------------------------------------------------
+# RULER CONFIGURATION
+# -------------------------------------------------------------------------
+# Enables alerting and recording rules (if you plan to use them).
+# Even if you don't use rules now, having this section avoids startup warnings.
+# Configure alertmanager_url as needed in the future.
 ruler:
   storage:
     type: local
     local:
       directory: /loki/rules
   rule_path: /loki/rules-temp
-  alertmanager_url: http://localhost:9093
+  # If you add Prometheus Alertmanager later, point to it here (e.g., http://alertmanager:9093)
+  alertmanager_url: http://localhost:9093  # configure as needed in the future
   ring:
     kvstore:
       store: inmemory
   enable_api: true
 
 limits_config:
-  ingestion_rate_mb: 16
-  ingestion_burst_size_mb: 32
+  # RATE LIMITING:
+  # Prevents a runaway container from crashing Loki by spamming logs too fast.
+  ingestion_rate_mb: 16 # Max MB/sec allowed per tenant
+  ingestion_burst_size_mb: 32 # Short bursts allowed above the limit
+
+  # This was required to fix the "metadata" error in newer Loki versions
   allow_structured_metadata: false # <--- Kept from previous fix
+
+  # DATA RETENTION:
+  # Logs older than this will be permanently deleted by the Compactor.
+  # 2400h = 100 days. Adjust based on your disk space availability.
+  retention_period: 2400h   # <--- 100 days (24h * 100 = 2400h) retention for logs
